@@ -42,6 +42,7 @@ static int swServer_poll_start(swServer *serv, swReactor *main_reactor_ptr);
 static int swServer_poll_onClose(swReactor *reactor, swEvent *event);
 static int swServer_poll_close_queue(swReactor *reactor, swCloseQueue *close_queue);
 static int swServer_poll_onReceive_no_buffer(swReactor *reactor, swEvent *event);
+static int swServer_poll_onReceive_no_buffer_bf_normal(swReactor *reactor, swEvent *event);
 static int swServer_poll_onReceive_conn_buffer(swReactor *reactor, swEvent *event);
 static int swServer_poll_onReceive_data_buffer(swReactor *reactor, swEvent *event);
 
@@ -67,6 +68,11 @@ swWorkerG SwooleWG;
 
 int16_t sw_errno;
 char sw_error[SW_ERROR_MSG_SIZE];
+
+//BF_Start
+typedef unsigned short	protocol_body_len;
+typedef unsigned short	protocol_id;
+//BF_End
 
 SWINLINE static int swConnection_close(swServer *serv, int fd, int16_t *from_id)
 {
@@ -1469,6 +1475,12 @@ static int swServer_poll_onReceive_no_buffer(swReactor *reactor, swEvent *event)
 	swServer *serv = reactor->ptr;
 	swFactory *factory = &(serv->factory);
 
+	//BF_Start
+	if (serv->open_bfeof_check == 1) {
+		return swServer_poll_onReceive_no_buffer_bf_normal(reactor, event);
+	}
+	//BF_End
+
 	struct
 	{
 		/**
@@ -1535,6 +1547,74 @@ static int swServer_poll_onReceive_no_buffer(swReactor *reactor, swEvent *event)
 	}
 	return SW_OK;
 }
+
+//BF_Start
+static int swServer_poll_onReceive_no_buffer_bf_normal(swReactor *reactor, swEvent *event)
+{
+	//实现边锋标准自定议
+	int ret, n;
+	int isEOF = -1;
+
+	swServer *serv = reactor->ptr;
+	swFactory *factory = &(serv->factory);
+	swConnection *connection = swServer_get_connection(serv, event->fd);
+	swEvent closeEv;
+	swConnBuffer *buffer = swConnection_get_buffer(connection);
+
+	if(buffer==NULL)
+	{
+		return SW_ERR;
+	}
+#ifdef SW_USE_EPOLLET
+	n = swRead(event->fd,  buffer->data.data + buffer->data.info.len, SW_BUFFER_SIZE - buffer->data.info.len);
+#else
+	//非ET模式会持续通知
+	n = recv(event->fd,  buffer->data.data + buffer->data.info.len, SW_BUFFER_SIZE - buffer->data.info.len, 0);
+#endif
+	if (n < 0)
+	{
+		swWarn("swRead error: %d\n", errno);
+		return SW_ERR;
+	}
+	else if (n == 0)
+	{
+		swTrace("Close Event.FD=%d|From=%d\n", event->fd, event->from_id);
+		memcpy(&closeEv, event, sizeof(swEvent));
+		closeEv.type = SW_EVENT_CLOSE;
+		return swServer_close(serv, event);
+	}
+	else
+	{
+		buffer->data.info.len += n;
+		int tempLen = buffer->data.info.len;
+		char* pTempData = buffer->data.data;
+		protocol_body_len body_len = *( (protocol_body_len*)buffer->data.data );
+
+		int this_protocol_len = body_len + 4;
+		buffer->data.info.fd = event->fd;
+		buffer->data.info.type = SW_EVENT_TCP;
+		buffer->data.info.from_id = event->from_id;
+		while (tempLen >= this_protocol_len)
+		{
+			//重置BuffLen
+			tempLen -= this_protocol_len;
+			buffer->data.info.len = this_protocol_len;
+			//拷贝一个完整协议
+			ret = factory->dispatch(factory, &buffer->data);
+			if (ret < 0)
+			{
+				swWarn("factory->dispatch fail");
+			}
+			pTempData += this_protocol_len;
+			memcpy(buffer->data.data, pTempData, tempLen);
+			pTempData = buffer->data.data;//0
+			this_protocol_len = *( (protocol_body_len*)buffer->data.data ) + 4;
+		}
+		buffer->data.info.len = tempLen;
+	}
+	return SW_OK;
+}
+//BF_End
 
 static int swServer_poll_onClose(swReactor *reactor, swEvent *event)
 {

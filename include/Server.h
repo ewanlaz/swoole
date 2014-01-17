@@ -150,6 +150,7 @@ struct swServer_s
 	uint8_t open_cpu_affinity; //是否设置CPU亲和性
 	uint8_t open_tcp_nodelay;  //是否关闭Nagle算法
 	uint8_t open_eof_check;    //检测数据EOF
+	uint8_t open_bfeof_check;    //检测数据EOF
 
 	/* tcp keepalive */
 	uint8_t open_tcp_keepalive; //开启keepalive

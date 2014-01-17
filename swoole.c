@@ -584,6 +584,16 @@ PHP_FUNCTION(swoole_server_set)
 		convert_to_long(*v);
 		serv->timer_interval = (int)Z_LVAL_PP(v);
 	}
+
+	//BF_Start
+	//data buffer, EOF检测
+	if (zend_hash_find(vht, ZEND_STRS("open_bfeof_check"), (void **)&v) == SUCCESS)
+	{
+		convert_to_long(*v);
+		serv->open_bfeof_check = (uint8_t)Z_LVAL_PP(v);
+	}
+	//BF_End
+
 	RETURN_TRUE;
 }
 
